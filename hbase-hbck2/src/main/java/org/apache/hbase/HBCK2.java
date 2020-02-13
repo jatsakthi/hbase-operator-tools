@@ -94,6 +94,7 @@ public class HBCK2 extends Configured implements org.apache.hadoop.util.Tool {
   private static final String SET_REGION_STATE = "setRegionState";
   private static final String SCHEDULE_RECOVERIES = "scheduleRecoveries";
   private static final String FIX_META = "fixMeta";
+  private static final String MERGE_REGIONS = "mergeRegions";
 
   private static final String ADD_MISSING_REGIONS_IN_META_FOR_TABLES =
     "addFsRegionsMissingInMeta";
@@ -337,6 +338,28 @@ public class HBCK2 extends Configured implements org.apache.hadoop.util.Tool {
     return hbck.scheduleServerCrashProcedure(serverNames);
   }
 
+  void mergeRegions(Hbck hbck, NonceGenerator ng, String[] args) throws IOException {
+    Options options = new Options();
+    Option forceOption = Option.builder("f").longOpt("force").build();
+    options.addOption(forceOption);
+    // Parse command-line.
+    CommandLineParser parser = new DefaultParser();
+    CommandLine commandLine;
+    try {
+      commandLine = parser.parse(options, args, false);
+    } catch (ParseException e) {
+      showErrorMessage(e.getMessage());
+      return;
+    }
+    boolean force = commandLine.hasOption(forceOption.getOpt());
+    List<byte[]> regions = new ArrayList<>();
+    for (String region : commandLine.getArgs()) {
+      regions.add(region.getBytes());
+    }
+    hbck.mergeRegions(regions, force, ng.getNonceGroup(), ng.newNonce());
+  }
+
+
   private HBaseProtos.ServerName parseServerName(String serverName) {
     ServerName sn = ServerName.parseServerName(serverName);
     return HBaseProtos.ServerName.newBuilder().setHostName(sn.getHostname()).
@@ -370,6 +393,8 @@ public class HBCK2 extends Configured implements org.apache.hadoop.util.Tool {
     usageFilesystem(writer);
     writer.println();
     usageFixMeta(writer);
+    writer.println();
+    usageMergeRegions(writer);
     writer.println();
     usageReplication(writer);
     writer.println();
@@ -472,6 +497,21 @@ public class HBCK2 extends Configured implements org.apache.hadoop.util.Tool {
         " will clear up hbase:meta issues. See 'HBase HBCK' UI");
     writer.println("   for how to generate new execute.");
     writer.println("   SEE ALSO: " + REPORT_MISSING_REGIONS_IN_META);
+  }
+
+  private static void usageMergeRegions(PrintWriter writer) {
+    writer.println(" " + MERGE_REGIONS + " [OPTIONS] <ENCODED_REGIONNAME_OR_FULL_REGIONNAME>...");
+    writer.println("   Options:");
+    writer.println("    -f, --force    Force a merge (i.e. even non-adjacent regions)");
+    writer.println("   Merge multiple regions on server side. You can use either the");
+    writer.println("   encoded region name or full region name. The encoded region name");
+    writer.println("   is the hash suffix on region names. e.g. if the region name were");
+    writer.println("   TestTable,0094429456,1289497600452.527db22f95c8a9e0116f0cc13c680396.");
+    writer.println("   then the encoded region name portion is 527db22f95c8a9e0116f0cc13c680396.");
+    writer.println("   Use the force option to merge non-adjacent regions. For example: ");
+    writer.println("     $ HBCK2 " + MERGE_REGIONS + " 527db22f95c8a9e0116f0cc13c680396"
+        + " 527db22f95c8a9e0116f0cc13c680397 527db22f95c8a9e0116f0cc13c680398");
+    writer.println("   Merges these 3 regions.");
   }
 
   private static void usageReplication(PrintWriter writer) {
@@ -868,6 +908,14 @@ public class HBCK2 extends Configured implements org.apache.hadoop.util.Tool {
           System.out.println(formatExtraRegionsReport(report));
         } catch (Exception e) {
           return EXIT_FAILURE;
+        }
+        break;
+
+      case MERGE_REGIONS:
+        try (ClusterConnection connection = connect(); Hbck hbck = connection.getHbck()) {
+          checkHBCKSupport(connection, command, "2.1.9", "2.2.4", "2.3.0");
+          NonceGenerator ng = connection.getNonceGenerator();
+          mergeRegions(hbck,ng,purgeFirst(commands));
         }
         break;
 
